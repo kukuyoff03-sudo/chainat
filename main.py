@@ -20,7 +20,6 @@ from selenium.common.exceptions import StaleElementReferenceException
 # --- ค่าคงที่ ---
 SINGBURI_URL = "https://singburi.thaiwater.net/wl"
 DISCHARGE_URL = 'https://tiwrm.hii.or.th/DATA/REPORT/php/chart/chaopraya/small/chaopraya.php'
-# HISTORICAL_DATA_FILE = 'data/dam_discharge_history_complete.csv' # No longer needed
 LINE_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_API_URL = "https://api.line.me/v2/bot/message/broadcast"
 
@@ -31,18 +30,12 @@ THAI_MONTHS = {
     'กันยายน':9, 'ตุลาคม':10, 'พฤศจิกายน':11, 'ธันวาคม':12
 }
 def get_historical_from_excel(year_be: int) -> int | None:
-    """
-    อ่านไฟล์ data/ระดับน้ำปี{year_be}.xlsx
-    คืนค่า discharge (ลบ.ม./วิ) ของวัน–เดือน ปัจจุบัน
-    """
     path = f"data/ระดับน้ำปี{year_be}.xlsx"
     try:
         if not os.path.exists(path):
             print(f"⚠️ ไม่พบไฟล์ข้อมูลย้อนหลังที่: {path}")
             return None
         df = pd.read_excel(path)
-        # เปลี่ยนเป็นแม็ปชื่อคอลัมน์ให้ตรงกับไฟล์ Excel จริง
-        # (ดูชื่อ header ในไฟล์ว่าตรงนี้คือ 'ปริมาณน้ำ (ลบ.ม./วินาที)')
         df = df.rename(columns={'ปริมาณน้ำ (ลบ.ม./วินาที)': 'discharge'})
         df['month_num'] = df['เดือน'].map(THAI_MONTHS)
 
@@ -59,8 +52,8 @@ def get_historical_from_excel(year_be: int) -> int | None:
         print(f"❌ ERROR: ไม่สามารถโหลดข้อมูลย้อนหลังจาก Excel ได้ ({path}): {e}")
         return None
 
-# --- ดึงระดับน้ำสรรพยา --- # <--- เปลี่ยนแปลง
-def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3): # <--- เปลี่ยนแปลง
+# --- ดึงระดับน้ำสรรพยา ---
+def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3):
     opts = Options()
     opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
@@ -75,20 +68,27 @@ def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3): # <--- เ
                 EC.presence_of_element_located((By.CSS_SELECTOR, "th[scope='row']"))
             )
             html = driver.page_source
+
+            # --- เพิ่มโค้ดส่วนนี้เพื่อ Debug ---
+            print("📸 กำลังบันทึก Screenshot และ HTML สำหรับตรวจสอบ...")
+            driver.save_screenshot('debug_screenshot.png')
+            with open('debug_page.html', 'w', encoding='utf-8') as f:
+                f.write(html)
+            print("✅ บันทึกไฟล์ debug_screenshot.png และ debug_page.html เรียบร้อย")
+            # --- จบส่วนของโค้ด Debug ---
             
             soup = BeautifulSoup(html, "html.parser")
             for th in soup.select("th[scope='row']"):
-                if "สรรพยา" in th.get_text(strip=True): # <--- เปลี่ยนแปลง: ค้นหา "สรรพยา"
+                if "สรรพยา" in th.get_text(strip=True):
                     tr = th.find_parent("tr")
                     cols = tr.find_all("td")
-                    # จาก HTML โครงสร้างคือ: [แม่น้ำ, ที่ตั้ง, ระดับน้ำ, ระดับตลิ่ง, ...]
-                    water_level = float(cols[2].get_text(strip=True)) # <--- เปลี่ยนแปลง: index 2
-                    bank_level = float(cols[3].get_text(strip=True))  # <--- เปลี่ยนแปลง: index 3
-                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level}") # <--- เปลี่ยนแปลง
+                    water_level = float(cols[2].get_text(strip=True))
+                    bank_level = float(cols[3].get_text(strip=True))
+                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level}")
                     if driver: driver.quit()
                     return water_level, bank_level
             
-            print("⚠️ ไม่พบข้อมูลสถานี 'สรรพยา' ในตาราง") # <--- เปลี่ยนแปลง
+            print("⚠️ ไม่พบข้อมูลสถานี 'สรรพยา' ในตาราง")
             if driver: driver.quit()
             return None, None
         except StaleElementReferenceException:
@@ -97,7 +97,7 @@ def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3): # <--- เ
             time.sleep(3)
             continue
         except Exception as e:
-            print(f"❌ ERROR: get_sapphaya_data: {e}") # <--- เปลี่ยนแปลง
+            print(f"❌ ERROR: get_sapphaya_data: {e}")
             if driver: driver.quit()
             return None, None
     return None, None
@@ -105,13 +105,11 @@ def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3): # <--- เ
 # --- ดึงข้อมูลเขื่อนเจ้าพระยา (เพิ่ม Cache Busting) ---
 def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
     try:
-        # เพิ่ม headers เพื่อพยายามไม่ให้ติด cache
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
         }
-        # เพิ่มตัวเลขสุ่มต่อท้าย URL (Cache Busting)
         cache_buster_url = f"{url}?cb={random.randint(10000, 99999)}"
         
         response = requests.get(cache_buster_url, headers=headers, timeout=10)
@@ -140,7 +138,7 @@ def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
     return None
 
 # --- วิเคราะห์และสร้างข้อความ ---
-def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_2567=None, hist_2554=None): # <--- เปลี่ยนแปลง
+def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_2567=None, hist_2554=None):
     distance_to_bank = bank_height - water_level
     
     ICON = ""
@@ -166,11 +164,11 @@ def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_256
     msg_lines = [
         f"{ICON} {HEADER}",
         "",
-        f"📍 รายงานสถานการณ์น้ำเจ้าพระยา (สถานี C.2 สรรพยา)", # <--- เปลี่ยนแปลง
+        f"📍 รายงานสถานการณ์น้ำเจ้าพระยา (สถานี C.2 สรรพยา)",
         f"🗓️ วันที่: {TIMESTAMP} น.",
         "",
         "🌊 ระดับน้ำ + ระดับตลิ่ง",
-        f"  • สรรพยา: {water_level:.2f} ม.รทก.", # <--- เปลี่ยนแปลง
+        f"  • สรรพยา: {water_level:.2f} ม.รทก.",
         f"  • ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)",
         "",
         "💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา",
@@ -189,12 +187,12 @@ def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_256
     return "\n".join(msg_lines)
 
 # --- สร้างข้อความ Error ---
-def create_error_message(station_status, discharge_status): # <--- เปลี่ยนแปลง
+def create_error_message(station_status, discharge_status):
     now = datetime.now(pytz.timezone('Asia/Bangkok'))
     return (
         f"⚙️❌ เกิดข้อผิดพลาดในการดึงข้อมูล ❌⚙️\n"
         f"เวลา: {now.strftime('%d/%m/%Y %H:%M')} น.\n\n"
-        f"• สถานะข้อมูลระดับน้ำสรรพยา: {station_status}\n" # <--- เปลี่ยนแปลง
+        f"• สถานะข้อมูลระดับน้ำสรรพยา: {station_status}\n"
         f"• สถานะข้อมูลเขื่อนเจ้าพระยา: {discharge_status}\n\n"
         f"กรุณาตรวจสอบ Log บน GitHub Actions เพื่อดูรายละเอียดข้อผิดพลาดครับ"
     )
@@ -213,24 +211,22 @@ def send_line_broadcast(message):
     except Exception as e:
         print(f"❌ ERROR: LINE Broadcast: {e}")
 
-# --- Main (เพิ่ม Cache Busting) ---
+# --- Main ---
 if __name__ == "__main__":
-    print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำ ===") # <--- เปลี่ยนแปลง
+    print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำ ===")
     
-    # เพิ่มตัวเลขสุ่มต่อท้าย URL ของ Selenium (Cache Busting)
     station_cache_buster_url = f"{SINGBURI_URL}?cb={random.randint(10000, 99999)}"
     
-    water_level, bank_level = get_sapphaya_data(station_cache_buster_url) # <--- เปลี่ยนแปลง
+    water_level, bank_level = get_sapphaya_data(station_cache_buster_url)
     dam_discharge = fetch_chao_phraya_dam_discharge(DISCHARGE_URL)
     
-    # ดึงข้อมูลย้อนหลังจาก Excel
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
 
     if water_level is not None and bank_level is not None and dam_discharge is not None:
         final_message = analyze_and_create_message(water_level, dam_discharge, bank_level, hist_2567, hist_2554)
     else:
-        station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว" # <--- เปลี่ยนแปลง
+        station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว"
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
         final_message = create_error_message(station_status, discharge_status)
 
