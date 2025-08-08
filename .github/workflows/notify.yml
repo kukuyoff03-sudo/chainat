@@ -15,7 +15,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
         with:
-          # แก้ปัญหาเรื่องสิทธิ์ โดยใช้ PAT Token
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Set up Python
@@ -32,3 +31,12 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         run: python main.py
+
+      - name: Upload debug artifacts
+        if: always() # ทำงานเสมอเพื่อเก็บไฟล์มาดู
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-files
+          path: |
+            debug_screenshot.png
+            debug_page.html
