@@ -101,15 +101,16 @@ def get_openweather_alert(
         if max_temp >= 35.0:
             messages.append(
                 f"โพนางดำออกวันนี้... แดดแรงเหมือนโกรธใครมา! 🥵\n\n"
-                f"อุณหภูมิสูงสุด {round(max_temp, 1)}°C เลยนะ พกร่มพกน้ำให้พร้อม!"
+                f"อุณหภูมิสูงสุดพุ่งไปถึง {round(max_temp, 1)}°C เลยนะ พกร่มพกน้ำให้พร้อม! 🍳"
             )
         if rain_detected_time:
             messages.append(
-                f"⛈️ เมฆเริ่มตั้งตี้สาดน้ำช่วง {rain_detected_time} น. พกร่มไว้ด้วยนะ เดี๋ยวเปียก!"
+                f"ชาวโพนางดำออก! ⛈️ เมฆกำลังตั้งตี้สาดน้ำ!\n\n"
+                f"มีแววฝนจะเทลงมาช่วงประมาณ {rain_detected_time} น. พกร่มไปด้วยนะ เดี๋ยวเปียก! 😎"
             )
         # If no significant events detected, provide a default message.
         if not messages:
-            messages.append("วันนี้อากาศปกติ ไม่มีเหตุการณ์พิเศษครับ ☀️")
+            messages.append("📍 วันนี้ที่โพนางดำออก: อากาศปกติ ☀️ ไม่มีเหตุพิเศษครับ")
         return "\n\n".join(messages)
     except Exception as e:
         return f"❌ เกิดข้อผิดพลาดในการดึงข้อมูลอากาศ: {e}"
@@ -409,17 +410,21 @@ def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
     return None
 
 
-# --- วิเคราะห์และสร้างข้อความ (ปรับปรุงใหม่) ---
+# --- วิเคราะห์และสร้างข้อความ ---
 def analyze_and_create_message(
     water_level: float,
     dam_discharge: float,
     bank_height: float,
     hist_2567: int | None = None,
-    hist_2554: int | None = None
+    hist_2554: int | None = None,
+    weather_summary: List[Tuple[str, str]] | None = None,
 ) -> str:
     """
-    Construct a human‑readable message summarising the current water situation
-    for ต.โพนางดำออก, designed for high readability on mobile devices.
+    Construct a human‑readable message summarising the current water
+    situation for ต.โพนางดำออก.  This version omits daily forecasts,
+    separates key sections (location, water level, dam discharge,
+    historical comparison and summary), and is designed for readability
+    on mobile devices.
 
     Parameters
     ----------
@@ -428,63 +433,79 @@ def analyze_and_create_message(
     dam_discharge : float
         Current discharge of the Chao Phraya Dam (m^3/s).
     bank_height : float
-        Minimum bank height at the Sapphaya station (m MSL).
+        Bank height used for comparison (m MSL).
     hist_2567 : int | None
         Historical discharge for year 2567 (optional).
     hist_2554 : int | None
         Historical discharge for year 2554 (optional).
+    weather_summary : list[tuple[str, str]] | None
+        Deprecated.  Left for backward compatibility but ignored.
 
     Returns
     -------
     str
-        A formatted message ready to be broadcast via LINE.
+        A formatted message without weather details or municipal line.
     """
+    # Calculate the remaining distance from the water surface to the top of the bank.
     distance_to_bank = bank_height - water_level
-    summary_text = ""
-    
-    # Determine risk status and summary text based on discharge and bank height.
+    # Determine the risk category and prepare guidance lines accordingly.
     if dam_discharge is not None and (dam_discharge > 2400 or distance_to_bank < 1.0):
         ICON = "🟥"
         HEADER = "‼️ ประกาศเตือนภัยระดับสูงสุด ‼️"
-        summary_text = f"ระดับน้ำเหลือเพียง {distance_to_bank:.2f} ม. จะถึงตลิ่ง และน้ำท้ายเขื่อนสูงถึง {dam_discharge:,.0f} ลบ.ม./วินาที ขอให้เตรียมพร้อมอพยพ ขนย้ายทรัพย์สินขึ้นที่สูง และงดใช้เส้นทางริมน้ำโดยเด็ดขาด 🚨"
+        summary_lines = [
+            "คำแนะนำ:",
+            "1. เตรียมพร้อมอพยพหากอยู่ในพื้นที่เสี่ยง",
+            "2. ขนย้ายทรัพย์สินขึ้นที่สูงโดยด่วน",
+            "3. งดใช้เส้นทางสัญจรริมแม่น้ำ",
+        ]
     elif dam_discharge is not None and (dam_discharge > 1800 or distance_to_bank < 2.0):
         ICON = "🟨"
         HEADER = "‼️ ประกาศเฝ้าระวัง ‼️"
-        summary_text = f"ระดับน้ำต่ำกว่าตลิ่ง {distance_to_bank:.2f} ม. และน้ำท้ายเขื่อน {dam_discharge:,.0f} ลบ.ม./วินาที ขอให้บ้านเรือนริมตลิ่งนอกคันกั้นน้ำเริ่มขนของขึ้นที่สูง และติดตามสถานการณ์อย่างใกล้ชิด 🟡"
+        summary_lines = [
+            "คำแนะนำ:",
+            "1. บ้านเรือนริมตลิ่งนอกคันกั้นน้ำ ให้เริ่มขนของขึ้นที่สูง",
+            "2. ติดตามสถานการณ์อย่างใกล้ชิด",
+        ]
     else:
         ICON = "🟩"
         HEADER = "สถานะปกติ"
-        summary_text = f"ระดับน้ำยังห่างตลิ่ง {distance_to_bank:.2f} ม. ถือว่า ปลอดภัย ประชาชนใช้ชีวิตตามปกติครับ ✅"
-        
+        summary_lines = [
+            f"ระดับน้ำยังห่างตลิ่ง {distance_to_bank:.2f} ม. ถือว่า \"ปลอดภัย\" ✅",
+            "ประชาชนใช้ชีวิตได้ตามปกติครับ",
+        ]
+    # Current timestamp.
     now = datetime.now(pytz.timezone("Asia/Bangkok"))
     TIMESTAMP = now.strftime("%d/%m/%Y %H:%M")
-    
-    # Begin constructing the message following the new design.
+    # Assemble the message as a list of lines.
     msg_lines: List[str] = []
     msg_lines.append(f"{ICON} {HEADER}")
-    msg_lines.append("")
-    msg_lines.append("📍 ต.โพนางดำออก อ.สรรพยา จ.ชัยนาท")
-    msg_lines.append("")
+    msg_lines.append(f"📍 ต.โพนางดำออก อ.สรรพยา จ.ชัยนาท")
     msg_lines.append(f"🗓️ วันที่: {TIMESTAMP} น.")
+    # Water section.
+    msg_lines.append("")
     msg_lines.append("🌊 ระดับน้ำ + ตลิ่ง")
-    msg_lines.append(f"• ระดับน้ำที่สถานีสรรพยา: {water_level:.2f} ม.รทก.")
-    msg_lines.append(f"• ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า: {distance_to_bank:.2f} ม.)")
-    
-    msg_lines.append("💧 น้ำปล่อยจากเขื่อนเจ้าพระยา:")
+    msg_lines.append(f"• ระดับน้ำ: {water_level:.2f} ม.รทก.")
+    msg_lines.append(f"• ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)")
+    # Dam discharge.
+    msg_lines.append("")
+    msg_lines.append("💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา")
     if dam_discharge is not None:
-        msg_lines.append(f"• {dam_discharge:,.1f} ลบ.ม./วินาที")
+        msg_lines.append(f"{dam_discharge:,} ลบ.ม./วินาที")
     else:
-        msg_lines.append("• ข้อมูลไม่พร้อมใช้งาน")
-        
-    msg_lines.append("📊 เทียบปริมาณน้ำย้อนหลัง:")
+        msg_lines.append("ข้อมูลไม่พร้อมใช้งาน")
+    # Historical comparison.
+    msg_lines.append("")
+    msg_lines.append("📊 เปรียบเทียบย้อนหลัง")
     if hist_2567 is not None:
         msg_lines.append(f"• ปี 2567: {hist_2567:,} ลบ.ม./วินาที")
     if hist_2554 is not None:
         msg_lines.append(f"• ปี 2554: {hist_2554:,} ลบ.ม./วินาที")
-        
-    msg_lines.append("🧾 สรุปสถานการณ์:")
-    msg_lines.append(summary_text)
-
+    # Summary.
+    msg_lines.append("")
+    msg_lines.append("🧾 สรุปสถานการณ์")
+    for line in summary_lines:
+        msg_lines.append(line)
+    # Return the assembled text.  Weather and municipality information are appended later.
     return "\n".join(msg_lines)
 
 
@@ -518,7 +539,7 @@ def send_line_broadcast(message):
         print(f"❌ ERROR: LINE Broadcast: {e}")
 
 
-# --- Main (ปรับปรุงใหม่) ---
+# --- Main ---
 if __name__ == "__main__":
     print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำ ===")
     # Fetch water level and bank height using the API
@@ -528,35 +549,32 @@ if __name__ == "__main__":
     # Historical references for comparison
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
-    
-    core_message = ""
     if water_level is not None and bank_level is not None and dam_discharge is not None:
-        # Generate the main water level message with the new format.
+        # Build the core message.  We no longer append multi‑day forecasts here.
         core_message = analyze_and_create_message(
             water_level,
             dam_discharge,
             bank_level,
             hist_2567,
-            hist_2554
+            hist_2554,
         )
     else:
         station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว"
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
         core_message = create_error_message(station_status, discharge_status)
-
-    # Fetch the immediate weather alert.
+    # Generate an immediate weather alert via OpenWeather.
     weather_alert = get_openweather_alert()
-    
-    # Compose the final message by combining the core report, weather, and signature.
-    final_message = core_message
-
-    # Append the weather section if the alert was successfully fetched.
-    if weather_alert and "เกิดข้อผิดพลาด" not in weather_alert:
-        final_message += f"\n\n🌡️ พยากรณ์อากาศวันนี้:\n\n{weather_alert}"
-    
-    # Always append the final signature.
-    final_message += "\n\n📌 เทศบาลตำบลโพนางดำออก"
-
+    # Construct the final message: include a heading for the weather section
+    # and always conclude with the municipality name.  If no weather alert
+    # is available, simply append the municipality name.
+    if weather_alert:
+        final_message = (
+            f"{core_message}\n\n"
+            f"🌡️ พยากรณ์อากาศวันนี้:\n{weather_alert}\n\n"
+            f"เทศบาลตำบลโพนางดำออก"
+        )
+    else:
+        final_message = f"{core_message}\n\nเทศบาลตำบลโพนางดำออก"
     print("\n📤 ข้อความที่จะแจ้งเตือน:")
     print(final_message)
     print("\n🚀 ส่งข้อความไปยัง LINE...")
