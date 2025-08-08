@@ -343,31 +343,15 @@ def get_sapphaya_data(
             response.raise_for_status()
             data = response.json().get("data", [])
             for item in data:
-                geocode = item.get("geocode", {})
-                tumbon_name = geocode.get("tumbon_name", {}).get("th", "")
-                station_info = item.get("station", {})
-                station_name = station_info.get("tele_station_name", {}).get("th", "")
-                if tumbon_name == target_tumbon and station_name == target_station_name:
-                    wl_str = item.get("waterlevel_msl")
-                    water_level = None
-                    if wl_str is not None:
-                        try:
-                            water_level = float(wl_str)
-                        except ValueError:
-                            water_level = None
-                    bank_level = None
-                    if station_info:
-                        bank_level = station_info.get("min_bank")
-                        if bank_level is None:
-                            left_bank = station_info.get("left_bank")
-                            right_bank = station_info.get("right_bank")
-                            if left_bank is not None and right_bank is not None:
-                                bank_level = (left_bank + right_bank) / 2
-                            elif left_bank is not None:
-                                bank_level = left_bank
-                            elif right_bank is not None:
-                                bank_level = right_bank
-                    print(
+                wl_str = item.get("waterlevel_msl")
+                water_level = None
+                if wl_str is not None:
+                    try:
+                        water_level = float(wl_str)
+                    except ValueError:
+                        water_level = None
+                bank_level = 13.87  # 🔒 กำหนดค่าตลิ่งคงที่
+    print(
                         f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (API)"
                     )
                     return water_level, bank_level
@@ -498,6 +482,18 @@ def analyze_and_create_message(
         msg_lines.append(f"  {dam_discharge:,} ลบ.ม./วินาที")
     else:
         msg_lines.append("  ข้อมูลไม่พร้อมใช้งาน")
+    # Append weather forecast if available.
+    if weather_summary:
+        msg_lines.append("")
+        msg_lines.append("🌤️ พยากรณ์อากาศรายวัน (ต.โพนางดำออก)")
+        for date_str, desc in weather_summary:
+            # Convert YYYY-MM-DD to more readable DD/MM format.
+            try:
+                dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                formatted_date = dt_obj.strftime("%d/%m")
+            except Exception:
+                formatted_date = date_str
+            msg_lines.append(f"  • {formatted_date}: {desc}")
     # Historical discharge comparison.
     msg_lines.append("")
     msg_lines.append("🔄 เปรียบเทียบย้อนหลัง")
@@ -509,9 +505,8 @@ def analyze_and_create_message(
     msg_lines.append(summary_text)
     # Conclude with municipality name.
     msg_lines.append("")
-    final_text = "\n".join(msg_lines)
-    return final_text
-
+    msg_lines.append("เทศบาลตำบลโพนางดำออก")
+    return "\n".join(msg_lines)
 
 
 # --- สร้างข้อความ Error ---
@@ -573,7 +568,7 @@ if __name__ == "__main__":
     # the core message.  A blank line separates the two segments for
     # readability.
     weather_alert = get_openweather_alert()
-    final_message = f"{core_message}\n\n{weather_alert}\n\nเทศบาลตำบลโพนางดำออก" if weather_alert else f"{core_message}\n\nเทศบาลตำบลโพนางดำออก"
+    final_message = f"{core_message}\n\n{weather_alert}" if weather_alert else core_message
     print("\n📤 ข้อความที่จะแจ้งเตือน:")
     print(final_message)
     print("\n🚀 ส่งข้อความไปยัง LINE...")
