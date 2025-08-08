@@ -68,38 +68,34 @@ def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3):
                 EC.presence_of_element_located((By.CSS_SELECTOR, "th[scope='row']"))
             )
             html = driver.page_source
-
-            # --- เพิ่มโค้ดส่วนนี้เพื่อ Debug ---
-            print("📸 กำลังบันทึก Screenshot และ HTML สำหรับตรวจสอบ...")
-            driver.save_screenshot('debug_screenshot.png')
-            with open('debug_page.html', 'w', encoding='utf-8') as f:
-                f.write(html)
-            print("✅ บันทึกไฟล์ debug_screenshot.png และ debug_page.html เรียบร้อย")
-            # --- จบส่วนของโค้ด Debug ---
             
             soup = BeautifulSoup(html, "html.parser")
             for th in soup.select("th[scope='row']"):
                 if "สรรพยา" in th.get_text(strip=True):
                     tr = th.find_parent("tr")
                     cols = tr.find_all("td")
-                    water_level = float(cols[2].get_text(strip=True))
-                    bank_level = float(cols[3].get_text(strip=True))
-                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level}")
+                    # จาก debug HTML พบว่า 'ระดับน้ำ' อยู่ที่ cols[2]
+                    water_level = float(cols[2].get_text(strip=True)) 
+                    # --- แก้ไขตรงนี้ ---
+                    # กำหนดค่าระดับตลิ่งโดยตรง เพราะหน้าเว็บไม่แสดงคอลัมน์นี้ให้
+                    bank_level = 15.28 
+                    
+                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (ค่าคงที่)")
                     if driver: driver.quit()
                     return water_level, bank_level
             
             print("⚠️ ไม่พบข้อมูลสถานี 'สรรพยา' ในตาราง")
             if driver: driver.quit()
             return None, None
-        except StaleElementReferenceException:
-            print(f"⚠️ เจอ Stale Element Reference (ครั้งที่ {attempt + 1}/{retries}), กำลังลองใหม่...")
-            if driver: driver.quit()
-            time.sleep(3)
-            continue
         except Exception as e:
-            print(f"❌ ERROR: get_sapphaya_data: {e}")
+            # แก้ไขการจัดการ Exception ให้ครอบคลุมมากขึ้น
+            print(f"❌ ERROR: get_sapphaya_data (ครั้งที่ {attempt + 1}): {e}")
             if driver: driver.quit()
-            return None, None
+            if attempt < retries - 1:
+                time.sleep(3) # รอสักครู่ก่อนลองใหม่
+                continue
+            else:
+                return None, None
     return None, None
 
 # --- ดึงข้อมูลเขื่อนเจ้าพระยา (เพิ่ม Cache Busting) ---
