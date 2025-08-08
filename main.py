@@ -59,8 +59,8 @@ def get_historical_from_excel(year_be: int) -> int | None:
         print(f"❌ ERROR: ไม่สามารถโหลดข้อมูลย้อนหลังจาก Excel ได้ ({path}): {e}")
         return None
 
-# --- ดึงระดับน้ำอินทร์บุรี ---
-def get_inburi_data(url: str, timeout: int = 45, retries: int = 3):
+# --- ดึงระดับน้ำสรรพยา --- # <--- เปลี่ยนแปลง
+def get_sapphaya_data(url: str, timeout: int = 45, retries: int = 3): # <--- เปลี่ยนแปลง
     opts = Options()
     opts.add_argument("--headless")
     opts.add_argument("--no-sandbox")
@@ -78,16 +78,17 @@ def get_inburi_data(url: str, timeout: int = 45, retries: int = 3):
             
             soup = BeautifulSoup(html, "html.parser")
             for th in soup.select("th[scope='row']"):
-                if "อินทร์บุรี" in th.get_text(strip=True):
+                if "สรรพยา" in th.get_text(strip=True): # <--- เปลี่ยนแปลง: ค้นหา "สรรพยา"
                     tr = th.find_parent("tr")
                     cols = tr.find_all("td")
-                    water_level = float(cols[1].get_text(strip=True))
-                    bank_level = 13.0
-                    print(f"✅ พบข้อมูลอินทร์บุรี: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (ค่าโดยประมาณ)")
+                    # จาก HTML โครงสร้างคือ: [แม่น้ำ, ที่ตั้ง, ระดับน้ำ, ระดับตลิ่ง, ...]
+                    water_level = float(cols[2].get_text(strip=True)) # <--- เปลี่ยนแปลง: index 2
+                    bank_level = float(cols[3].get_text(strip=True))  # <--- เปลี่ยนแปลง: index 3
+                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level}") # <--- เปลี่ยนแปลง
                     if driver: driver.quit()
                     return water_level, bank_level
             
-            print("⚠️ ไม่พบข้อมูลสถานี 'อินทร์บุรี' ในตาราง")
+            print("⚠️ ไม่พบข้อมูลสถานี 'สรรพยา' ในตาราง") # <--- เปลี่ยนแปลง
             if driver: driver.quit()
             return None, None
         except StaleElementReferenceException:
@@ -96,7 +97,7 @@ def get_inburi_data(url: str, timeout: int = 45, retries: int = 3):
             time.sleep(3)
             continue
         except Exception as e:
-            print(f"❌ ERROR: get_inburi_data: {e}")
+            print(f"❌ ERROR: get_sapphaya_data: {e}") # <--- เปลี่ยนแปลง
             if driver: driver.quit()
             return None, None
     return None, None
@@ -139,8 +140,8 @@ def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
     return None
 
 # --- วิเคราะห์และสร้างข้อความ ---
-def analyze_and_create_message(inburi_level, dam_discharge, bank_height, hist_2567=None, hist_2554=None):
-    distance_to_bank = bank_height - inburi_level
+def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_2567=None, hist_2554=None): # <--- เปลี่ยนแปลง
+    distance_to_bank = bank_height - water_level
     
     ICON = ""
     HEADER = ""
@@ -165,11 +166,11 @@ def analyze_and_create_message(inburi_level, dam_discharge, bank_height, hist_25
     msg_lines = [
         f"{ICON} {HEADER}",
         "",
-        f"📍 รายงานสถานการณ์น้ำเจ้าพระยา จ.อ.อินทร์บุรี",
+        f"📍 รายงานสถานการณ์น้ำเจ้าพระยา (สถานี C.2 สรรพยา)", # <--- เปลี่ยนแปลง
         f"🗓️ วันที่: {TIMESTAMP} น.",
         "",
         "🌊 ระดับน้ำ + ระดับตลิ่ง",
-        f"  • อินทร์บุรี: {inburi_level:.2f} ม.รทก.",
+        f"  • สรรพยา: {water_level:.2f} ม.รทก.", # <--- เปลี่ยนแปลง
         f"  • ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)",
         "",
         "💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา",
@@ -188,12 +189,12 @@ def analyze_and_create_message(inburi_level, dam_discharge, bank_height, hist_25
     return "\n".join(msg_lines)
 
 # --- สร้างข้อความ Error ---
-def create_error_message(inburi_status, discharge_status):
+def create_error_message(station_status, discharge_status): # <--- เปลี่ยนแปลง
     now = datetime.now(pytz.timezone('Asia/Bangkok'))
     return (
         f"⚙️❌ เกิดข้อผิดพลาดในการดึงข้อมูล ❌⚙️\n"
         f"เวลา: {now.strftime('%d/%m/%Y %H:%M')} น.\n\n"
-        f"• สถานะข้อมูลระดับน้ำอินทร์บุรี: {inburi_status}\n"
+        f"• สถานะข้อมูลระดับน้ำสรรพยา: {station_status}\n" # <--- เปลี่ยนแปลง
         f"• สถานะข้อมูลเขื่อนเจ้าพระยา: {discharge_status}\n\n"
         f"กรุณาตรวจสอบ Log บน GitHub Actions เพื่อดูรายละเอียดข้อผิดพลาดครับ"
     )
@@ -214,24 +215,24 @@ def send_line_broadcast(message):
 
 # --- Main (เพิ่ม Cache Busting) ---
 if __name__ == "__main__":
-    print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำอินทร์บุรี ===")
+    print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำ ===") # <--- เปลี่ยนแปลง
     
     # เพิ่มตัวเลขสุ่มต่อท้าย URL ของ Selenium (Cache Busting)
-    inburi_cache_buster_url = f"{SINGBURI_URL}?cb={random.randint(10000, 99999)}"
+    station_cache_buster_url = f"{SINGBURI_URL}?cb={random.randint(10000, 99999)}"
     
-    inburi_level, bank_level = get_inburi_data(inburi_cache_buster_url)
+    water_level, bank_level = get_sapphaya_data(station_cache_buster_url) # <--- เปลี่ยนแปลง
     dam_discharge = fetch_chao_phraya_dam_discharge(DISCHARGE_URL)
     
     # ดึงข้อมูลย้อนหลังจาก Excel
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
 
-    if inburi_level is not None and bank_level is not None and dam_discharge is not None:
-        final_message = analyze_and_create_message(inburi_level, dam_discharge, bank_level, hist_2567, hist_2554)
+    if water_level is not None and bank_level is not None and dam_discharge is not None:
+        final_message = analyze_and_create_message(water_level, dam_discharge, bank_level, hist_2567, hist_2554)
     else:
-        inburi_status = "สำเร็จ" if inburi_level is not None else "ล้มเหลว"
+        station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว" # <--- เปลี่ยนแปลง
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
-        final_message = create_error_message(inburi_status, discharge_status)
+        final_message = create_error_message(station_status, discharge_status)
 
     print("\n📤 ข้อความที่จะแจ้งเตือน:")
     print(final_message)
