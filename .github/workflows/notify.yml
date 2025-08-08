@@ -2,10 +2,8 @@ name: Daily Water Level Notification
 
 on:
   schedule:
-    # 07:30 ICT -> 00:30 UTC
+    # รันทุกวันเวลา 07:30 น. (เวลาประเทศไทย) ซึ่งเทียบเท่ากับ 00:30 UTC
     - cron: '30 0 * * *'
-    # 16:00 ICT -> 09:00 UTC
-    - cron: '0 9 * * *'
   workflow_dispatch:
 
 jobs:
