@@ -7,6 +7,7 @@ import requests
 import pytz
 import pandas as pd
 from datetime import datetime
+from typing import List, Tuple
 
 # Even though some of these imports are no longer used directly (e.g. Selenium),
 # we retain them here for compatibility with the existing deployment
@@ -28,6 +29,128 @@ THAI_MONTHS = {
     'พฤษภาคม':5, 'มิถุนายน':6, 'กรกฎาคม':7, 'สิงหาคม':8,
     'กันยายน':9, 'ตุลาคม':10, 'พฤศจิกายน':11, 'ธันวาคม':12
 }
+
+# --- พยากรณ์อากาศ ---
+# Define the coordinates for ต.โพนางดำออก (Pho Nang Dam Ok) in Chai Nat.
+# These values are approximate and derived from publicly available
+# administrative datasets.  The open‑meteom API will use these
+# coordinates to return location‑specific weather forecasts.
+WEATHER_LAT = 15.120
+WEATHER_LON = 100.283
+
+# Mapping from WMO weather codes (used by Open‑Meteo) to a human‑readable
+# description in Thai.  The categories focus on the presence of sunshine,
+# rain, heavy rain, or thunderstorm for easy comprehension in a daily
+# summary.  The precipitation amount (mm) will further refine the
+# classification (e.g., heavy rain vs. light rain).
+def weather_code_to_description(code: int, precipitation: float) -> str:
+    """
+    Convert a WMO weather code and precipitation amount into a concise
+    description in Thai.  Codes are documented by Open‑Meteo.  We also
+    consider the precipitation sum to categorise light vs. heavy rain.
+
+    Parameters
+    ----------
+    code : int
+        The WMO weather code.
+    precipitation : float
+        Total precipitation (mm) for the day.
+
+    Returns
+    -------
+    str
+        A short description in Thai summarising the daily weather.
+    """
+    # Thunderstorm codes (95, 96, 99) indicate storms.  Precipitation
+    # amount doesn't change the classification because storms are
+    # inherently severe.
+    if code in {95, 96, 99}:
+        return "พายุฝนฟ้าคะนอง"
+    # Codes 0–3 correspond to clear or cloudy conditions.
+    if code == 0:
+        return "ท้องฟ้าแจ่มใส"
+    if code in {1, 2, 3}:
+        return "มีเมฆเป็นส่วนใหญ่"
+    # Fog or mist (45, 48).
+    if code in {45, 48}:
+        return "มีหมอก"
+    # Drizzle codes (51–57) and rain codes (61–67, 80–82) are
+    # differentiated by precipitation amount.
+    if code in {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82}:
+        # Heavy rain if precipitation exceeds 10 mm.
+        if precipitation >= 10.0:
+            return "ฝนตกหนัก"
+        # Moderate rain if precipitation between 2 and 10 mm.
+        if precipitation >= 2.0:
+            return "ฝนปานกลาง"
+        # Light rain for precipitation < 2 mm.
+        return "ฝนตกเล็กน้อย"
+    # Snow codes are rare in Thailand but we include them for completeness.
+    if code in {71, 73, 75, 77, 85, 86}:
+        return "หิมะ"
+    # Default fallback description.
+    return "สภาพอากาศไม่ทราบแน่ชัด"
+
+def get_weather_forecast(
+    lat: float = WEATHER_LAT,
+    lon: float = WEATHER_LON,
+    days: int = 3,
+    timezone: str = "Asia/Bangkok",
+    timeout: int = 15,
+) -> List[Tuple[str, str]]:
+    """
+    Fetch a daily weather forecast for the given coordinates using the
+    Open‑Meteo API.  It returns a list of tuples containing the
+    date (YYYY‑MM‑DD) and a concise description.  Only the next `days`
+    entries are returned.
+
+    Parameters
+    ----------
+    lat : float
+        Latitude of the location.
+    lon : float
+        Longitude of the location.
+    days : int
+        Number of days of forecast to return.  Defaults to 3.
+    timezone : str
+        Timezone for date interpretation.  Defaults to Asia/Bangkok.
+    timeout : int
+        Timeout in seconds for the HTTP request.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of (date, description) tuples.  If the API call
+        fails, an empty list is returned.
+    """
+    try:
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "daily": "weathercode,precipitation_sum",
+            "timezone": timezone,
+        }
+        resp = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params=params,
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("daily", {})
+        dates = data.get("time", [])
+        codes = data.get("weathercode", [])
+        precipitation_list = data.get("precipitation_sum", [])
+        forecast = []
+        for i in range(min(days, len(dates))):
+            date = dates[i]
+            code = codes[i] if i < len(codes) else None
+            prec = precipitation_list[i] if i < len(precipitation_list) else 0.0
+            desc = weather_code_to_description(code, prec) if code is not None else "-"
+            forecast.append((date, desc))
+        return forecast
+    except Exception as e:
+        print(f"❌ ERROR: get_weather_forecast: {e}")
+        return []
 
 def get_historical_from_excel(year_be: int) -> int | None:
     """
@@ -190,64 +313,109 @@ def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
 
 
 # --- วิเคราะห์และสร้างข้อความ ---
-def analyze_and_create_message(water_level, dam_discharge, bank_height, hist_2567=None, hist_2554=None):
+def analyze_and_create_message(
+    water_level: float,
+    dam_discharge: float,
+    bank_height: float,
+    hist_2567: int | None = None,
+    hist_2554: int | None = None,
+    weather_summary: List[Tuple[str, str]] | None = None,
+) -> str:
     """
-    Construct a human‑readable message summarising the current water
-    situation.  It compares the water level to the bank height and
-    categorises the risk level accordingly.  Historical discharge
-    statistics can be passed in for comparison.
+    Construct a human‑readable message summarising the current water and
+    weather situation for ต.โพนางดำออก.  It compares the water level
+    to the bank height and categorises the risk level.  A daily
+    weather summary can be supplied to inform residents if they
+    should expect sunshine, rain, heavy rain, or thunderstorms.  The
+    message is formatted for readability on mobile devices.
+
+    Parameters
+    ----------
+    water_level : float
+        Current water level at the Sapphaya station (m MSL).
+    dam_discharge : float
+        Current discharge of the Chao Phraya Dam (m^3/s).
+    bank_height : float
+        Minimum bank height at the Sapphaya station (m MSL).
+    hist_2567 : int | None
+        Historical discharge for year 2567 (optional).
+    hist_2554 : int | None
+        Historical discharge for year 2554 (optional).
+    weather_summary : list[tuple[str, str]] | None
+        List of (date, description) tuples summarising daily weather.
+
+    Returns
+    -------
+    str
+        A formatted message ready to be broadcast via LINE.
     """
     distance_to_bank = bank_height - water_level
-    ICON = ""
-    HEADER = ""
-    summary_text = ""
+    # Determine risk status based on discharge and remaining bank height.
     if dam_discharge is not None and (dam_discharge > 2400 or distance_to_bank < 1.0):
         ICON = "🟥"
         HEADER = "‼️ ประกาศเตือนภัยระดับสูงสุด ‼️"
-        summary_text = ("คำแนะนำ:\n"
-                        "1. เตรียมพร้อมอพยพหากอยู่ในพื้นที่เสี่ยง\n"
-                        "2. ขนย้ายทรัพย์สินขึ้นที่สูงโดยด่วน\n"
-                        "3. งดใช้เส้นทางสัญจรริมแม่น้ำ")
+        summary_text = (
+            "คำแนะนำ:\n"
+            "1. เตรียมพร้อมอพยพหากอยู่ในพื้นที่เสี่ยง\n"
+            "2. ขนย้ายทรัพย์สินขึ้นที่สูงโดยด่วน\n"
+            "3. งดใช้เส้นทางสัญจรริมแม่น้ำ"
+        )
     elif dam_discharge is not None and (dam_discharge > 1800 or distance_to_bank < 2.0):
         ICON = "🟨"
         HEADER = "‼️ ประกาศเฝ้าระวัง ‼️"
-        summary_text = ("คำแนะนำ:\n"
-                        "1. บ้านเรือนริมตลิ่งนอกคันกั้นน้ำ ให้เริ่มขนของขึ้นที่สูง\n"
-                        "2. ติดตามสถานการณ์อย่างใกล้ชิด")
+        summary_text = (
+            "คำแนะนำ:\n"
+            "1. บ้านเรือนริมตลิ่งนอกคันกั้นน้ำ ให้เริ่มขนของขึ้นที่สูง\n"
+            "2. ติดตามสถานการณ์อย่างใกล้ชิด"
+        )
     else:
         ICON = "🟩"
         HEADER = "สถานะปกติ"
         summary_text = "สถานการณ์น้ำยังปกติ ใช้ชีวิตได้ตามปกติครับ"
-    now = datetime.now(pytz.timezone('Asia/Bangkok'))
-    TIMESTAMP = now.strftime('%d/%m/%Y %H:%M')
-    msg_lines = [
-        f"{ICON} {HEADER}",
-        "",
-        "📍 รายงานสถานการณ์น้ำเจ้าพระยา (สถานี สรรพยา)",
-        f"🗓️ วันที่: {TIMESTAMP} น.",
-        "",
-        "🌊 ระดับน้ำ + ระดับตลิ่ง",
-        f"  • สรรพยา: {water_level:.2f} ม.รทก.",
-        f"  • ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)",
-        "",
-        "💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา",
-    ]
+    now = datetime.now(pytz.timezone("Asia/Bangkok"))
+    TIMESTAMP = now.strftime("%d/%m/%Y %H:%M")
+    # Begin constructing the message as a list of lines for clarity.
+    msg_lines: List[str] = []
+    msg_lines.append(f"{ICON} {HEADER}")
+    msg_lines.append("")
+    # Emphasise the coverage area.
+    msg_lines.append("📍 พื้นที่: ต.โพนางดำออก อ.สรรพยา จ.ชัยนาท")
+    msg_lines.append("📍 รายงานสถานการณ์น้ำเจ้าพระยา (สถานี สรรพยา)")
+    msg_lines.append(f"🗓️ วันที่: {TIMESTAMP} น.")
+    msg_lines.append("")
+    msg_lines.append("🌊 ระดับน้ำ + ระดับตลิ่ง")
+    msg_lines.append(f"  • สรรพยา: {water_level:.2f} ม.รทก.")
+    msg_lines.append(f"  • ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)")
+    msg_lines.append("")
+    msg_lines.append("💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา")
     if dam_discharge is not None:
         msg_lines.append(f"  {dam_discharge:,} ลบ.ม./วินาที")
     else:
         msg_lines.append("  ข้อมูลไม่พร้อมใช้งาน")
-    msg_lines += [
-        "",
-        "🔄 เปรียบเทียบย้อนหลัง",
-    ]
+    # Append weather forecast if available.
+    if weather_summary:
+        msg_lines.append("")
+        msg_lines.append("🌤️ พยากรณ์อากาศรายวัน (ต.โพนางดำออก)")
+        for date_str, desc in weather_summary:
+            # Convert YYYY-MM-DD to more readable DD/MM format.
+            try:
+                dt_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                formatted_date = dt_obj.strftime("%d/%m")
+            except Exception:
+                formatted_date = date_str
+            msg_lines.append(f"  • {formatted_date}: {desc}")
+    # Historical discharge comparison.
+    msg_lines.append("")
+    msg_lines.append("🔄 เปรียบเทียบย้อนหลัง")
     if hist_2567 is not None:
         msg_lines.append(f"  • ปี 2567: {hist_2567:,} ลบ.ม./วินาที")
     if hist_2554 is not None:
         msg_lines.append(f"  • ปี 2554: {hist_2554:,} ลบ.ม./วินาที")
-    msg_lines += [
-        "",
-        summary_text
-    ]
+    msg_lines.append("")
+    msg_lines.append(summary_text)
+    # Conclude with municipality name.
+    msg_lines.append("")
+    msg_lines.append("เทศบาลตำบลโพนางดำออก")
     return "\n".join(msg_lines)
 
 
@@ -292,12 +460,15 @@ if __name__ == "__main__":
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
     if water_level is not None and bank_level is not None and dam_discharge is not None:
+        # Fetch a short weather forecast (e.g., 3 days) for Pho Nang Dam Ok
+        weather_summary = get_weather_forecast(days=3)
         final_message = analyze_and_create_message(
             water_level,
             dam_discharge,
             bank_level,
             hist_2567,
             hist_2554,
+            weather_summary,
         )
     else:
         station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว"
