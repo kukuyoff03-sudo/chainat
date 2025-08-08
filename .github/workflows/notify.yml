@@ -27,16 +27,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests pytz pandas beautifulsoup4 selenium webdriver-manager openpyxl
 
+      # ... (โค้ดส่วนบนถึง Run Python script) ...
+
       - name: Run Python script
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
         run: python main.py
 
-      - name: Upload debug artifacts
-        if: always() # ทำงานเสมอเพื่อเก็บไฟล์มาดู
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-files
-          path: |
-            debug_screenshot.png
-            debug_page.html
+# --- ลบขั้นตอนข้างล่างนี้ออกทั้งหมด ---
+#      - name: Upload debug artifacts
+#        if: always()
+#        uses: actions/upload-artifact@v4
+#        with:
+#          name: debug-files
+#          path: |
+#            debug_screenshot.png
+#            debug_page.html
