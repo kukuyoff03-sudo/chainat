@@ -9,6 +9,112 @@ import pandas as pd
 from datetime import datetime
 from typing import List, Tuple
 
+# We will integrate a second weather source (OpenWeather) for more
+# descriptive alerts about today's conditions.  The following
+# constants and helper function are adapted from the original
+# `อากาศ.py` script provided by the user.  This ensures the script
+# produces both a multi‑day forecast (via Open‑Meteo) and an
+# immediate weather alert (via OpenWeather) within the same
+# notification message.
+
+# --- OpenWeather configuration ---
+# If the user has set an environment variable named
+# `OPENWEATHER_API_KEY`, it will be used to override the default key.
+OPENWEATHER_API_KEY = os.environ.get(
+    "OPENWEATHER_API_KEY", "c55ccdd65d09909976428698e8da16ec"
+)
+
+def get_openweather_alert(
+    lat: float | None = None,
+    lon: float | None = None,
+    api_key: str = OPENWEATHER_API_KEY,
+    timezone: str = "Asia/Bangkok",
+    timeout: int = 15,
+) -> str:
+    """
+    Fetch a 5‑day/3‑hour forecast from OpenWeather and generate a
+    succinct alert for today.  It summarises whether there will be
+    exceptionally hot weather or a likelihood of rain/thunderstorms.
+    If neither condition is met, it returns a generic message.  Any
+    errors encountered will result in a descriptive error string.
+
+    Parameters
+    ----------
+    lat : float
+        Latitude of the location.
+    lon : float
+        Longitude of the location.
+    api_key : str
+        OpenWeather API key.  If not provided, a default key is used.
+    timezone : str
+        IANA timezone string for localising timestamps.
+    timeout : int
+        Timeout in seconds for the HTTP request.
+
+    Returns
+    -------
+    str
+        A message describing today's expected weather conditions.
+    """
+    try:
+        # Use global coordinates if none are provided at call time.
+        if lat is None:
+            # Defer import to runtime to ensure WEATHER_LAT is defined.
+            lat = WEATHER_LAT
+        if lon is None:
+            lon = WEATHER_LON
+        # Build the OpenWeather API URL.  Using metric units to obtain
+        # temperatures in Celsius directly.
+        url = (
+            f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
+            f"&appid={api_key}&units=metric"
+        )
+        resp = requests.get(url, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        # Establish local timezone and today's date string for filtering.
+        tz = pytz.timezone(timezone)
+        now = datetime.now(tz)
+        today_str = now.strftime("%Y-%m-%d")
+        max_temp = -999.0
+        rain_detected_time: str | None = None
+        # Iterate over forecast entries.  Each entry has a timestamp and
+        # weather conditions.  We're only interested in entries for the
+        # current local day.
+        for entry in data.get("list", []):
+            ts = entry.get("dt_txt", "")
+            if today_str not in ts:
+                continue
+            temp = entry.get("main", {}).get("temp")
+            weather = entry.get("weather", [])
+            if temp is not None and isinstance(temp, (int, float)):
+                if temp > max_temp:
+                    max_temp = temp
+            if weather:
+                weather_id = weather[0].get("id")
+                # Weather codes: thunderstorms (95,96,99) or heavy rain (500‑504)
+                if weather_id in {95, 96, 99, 500, 501, 502, 503, 504} and not rain_detected_time:
+                    # Extract HH:MM portion of the timestamp (YYYY‑MM‑DD HH:MM:SS)
+                    rain_detected_time = ts[11:16] if len(ts) >= 16 else None
+        # Construct messages based on conditions.
+        messages = []
+        if max_temp >= 35.0:
+            messages.append(
+                f"โพนางดำออกวันนี้... แดดแรงเหมือนโกรธใครมา! 🥵\n\n"
+                f"อุณหภูมิสูงสุดพุ่งไปถึง {round(max_temp, 1)}°C เลยนะ พกร่มพกน้ำให้พร้อม! 🍳"
+            )
+        if rain_detected_time:
+            messages.append(
+                f"ชาวโพนางดำออก! ⛈️ เมฆกำลังตั้งตี้สาดน้ำ!\n\n"
+                f"มีแววฝนจะเทลงมาช่วงประมาณ {rain_detected_time} น. พกร่มไปด้วยนะ เดี๋ยวเปียก! 😎"
+            )
+        # If no significant events detected, provide a default message.
+        if not messages:
+            messages.append("📍 วันนี้ที่โพนางดำออก: อากาศปกติ ☀️ ไม่มีเหตุพิเศษครับ")
+        return "\n\n".join(messages)
+    except Exception as e:
+        return f"❌ เกิดข้อผิดพลาดในการดึงข้อมูลอากาศ: {e}"
+
 # Even though some of these imports are no longer used directly (e.g. Selenium),
 # we retain them here for compatibility with the existing deployment
 # environment. Selenium was previously used for scraping, but the updated
@@ -462,7 +568,7 @@ if __name__ == "__main__":
     if water_level is not None and bank_level is not None and dam_discharge is not None:
         # Fetch a short weather forecast (e.g., 3 days) for Pho Nang Dam Ok
         weather_summary = get_weather_forecast(days=3)
-        final_message = analyze_and_create_message(
+        core_message = analyze_and_create_message(
             water_level,
             dam_discharge,
             bank_level,
@@ -473,7 +579,12 @@ if __name__ == "__main__":
     else:
         station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว"
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
-        final_message = create_error_message(station_status, discharge_status)
+        core_message = create_error_message(station_status, discharge_status)
+    # Generate an immediate weather alert via OpenWeather and append it to
+    # the core message.  A blank line separates the two segments for
+    # readability.
+    weather_alert = get_openweather_alert()
+    final_message = f"{core_message}\n\n{weather_alert}" if weather_alert else core_message
     print("\n📤 ข้อความที่จะแจ้งเตือน:")
     print(final_message)
     print("\n🚀 ส่งข้อความไปยัง LINE...")
