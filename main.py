@@ -509,8 +509,9 @@ def analyze_and_create_message(
     msg_lines.append(summary_text)
     # Conclude with municipality name.
     msg_lines.append("")
-    msg_lines.append("เทศบาลตำบลโพนางดำออก")
-    return "\n".join(msg_lines)
+    final_text = "\n".join(msg_lines)
+    return final_text
+
 
 
 # --- สร้างข้อความ Error ---
@@ -572,7 +573,7 @@ if __name__ == "__main__":
     # the core message.  A blank line separates the two segments for
     # readability.
     weather_alert = get_openweather_alert()
-    final_message = f"{core_message}\n\n{weather_alert}" if weather_alert else core_message
+    final_message = f"{core_message}\n\n{weather_alert}\n\nเทศบาลตำบลโพนางดำออก" if weather_alert else f"{core_message}\n\nเทศบาลตำบลโพนางดำออก"
     print("\n📤 ข้อความที่จะแจ้งเตือน:")
     print(final_message)
     print("\n🚀 ส่งข้อความไปยัง LINE...")
