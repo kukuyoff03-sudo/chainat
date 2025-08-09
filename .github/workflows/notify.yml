@@ -4,7 +4,7 @@ on:
   schedule:
     # รันทุกวันเวลา 07:30 น. (เวลาประเทศไทย) ซึ่งเทียบเท่ากับ 00:30 UTC
     - cron: '30 0 * * *'
-  workflow_dispatch:
+  workflow_dispatch: # Trivial change to re-activate cron
 
 jobs:
   notify:
