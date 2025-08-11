@@ -7,228 +7,227 @@ import requests
 import pytz
 import pandas as pd
 from datetime import datetime
-from typing import List, Tuple
-from bs4 import BeautifulSoup
+from typing import List, Tuple, Dict, Any
 
-# We will integrate a second weather source (OpenWeather) for more
-# descriptive alerts about today's conditions.  The following
-# constants and helper function are adapted from the original
-# `อากาศ.py` script provided by the user.  This ensures the script
-# produces both a multi‑day forecast (via Open‑Meteo) and an
-# immediate weather alert (via OpenWeather) within the same
-# notification message.
+# --- Constants and Configuration ---
 
-# --- OpenWeather configuration ---
-# If the user has set an environment variable named
-# `OPENWEATHER_API_KEY`, it will be used to override the default key.
+# If the user has set an environment variable, it will be used.
 OPENWEATHER_API_KEY = os.environ.get(
     "OPENWEATHER_API_KEY", "c55ccdd65d09909976428698e8da16ec"
 )
-
-# --- TMD Data Sources (NEW) ---
-# URL for TMD's radar page for the Chao Phraya basin. This page is
-# monitored for near-real-time rain "nowcasting".
-TMD_RADAR_URL = "https://weather.tmd.go.th/chaophraya.php"
-
-def get_openweather_alert(
-    lat: float | None = None,
-    lon: float | None = None,
-    api_key: str = OPENWEATHER_API_KEY,
-    timezone: str = "Asia/Bangkok",
-    timeout: int = 15,
-) -> str:
-    """
-    Fetch a 5‑day/3‑hour forecast from OpenWeather and generate a
-    succinct alert for today.  It summarises whether there will be
-    exceptionally hot weather or a likelihood of rain/thunderstorms.
-    If neither condition is met, it returns a generic message.  Any
-    errors encountered will result in a descriptive error string.
-
-    Parameters
-    ----------
-    lat : float
-        Latitude of the location.
-    lon : float
-        Longitude of the location.
-    api_key : str
-        OpenWeather API key.  If not provided, a default key is used.
-    timezone : str
-        IANA timezone string for localising timestamps.
-    timeout : int
-        Timeout in seconds for the HTTP request.
-
-    Returns
-    -------
-    str
-        A message describing today's expected weather conditions.
-    """
-    try:
-        # Use global coordinates if none are provided at call time.
-        if lat is None:
-            # Defer import to runtime to ensure WEATHER_LAT is defined.
-            lat = WEATHER_LAT
-        if lon is None:
-            lon = WEATHER_LON
-        # Build the OpenWeather API URL.  Using metric units to obtain
-        # temperatures in Celsius directly.
-        url = (
-            f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
-            f"&appid={api_key}&units=metric"
-        )
-        resp = requests.get(url, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        # Establish local timezone and today's date string for filtering.
-        tz = pytz.timezone(timezone)
-        now = datetime.now(tz)
-        today_str = now.strftime("%Y-%m-%d")
-        max_temp = -999.0
-        rain_detected_time: str | None = None
-        # Iterate over forecast entries.  Each entry has a timestamp and
-        # weather conditions.  We're only interested in entries for the
-        # current local day.
-        for entry in data.get("list", []):
-            ts = entry.get("dt_txt", "")
-            if today_str not in ts:
-                continue
-            temp = entry.get("main", {}).get("temp")
-            weather = entry.get("weather", [])
-            if temp is not None and isinstance(temp, (int, float)):
-                if temp > max_temp:
-                    max_temp = temp
-            if weather:
-                weather_id = weather[0].get("id")
-                # Weather codes: thunderstorms (2xx) or heavy rain (5xx)
-                if 200 <= weather_id < 300 or 500 <= weather_id < 600:
-                    if not rain_detected_time:
-                        # Extract HH:MM portion of the timestamp (YYYY‑MM‑DD HH:MM:SS)
-                        rain_detected_time = ts[11:16] if len(ts) >= 16 else None
-        # Construct messages based on conditions.
-        messages = []
-        if max_temp >= 35.0:
-            messages.append(
-                f"• พื้นที่ ต.โพนางดำออก อุณหภูมิสูงสุดประมาณ {round(max_temp, 1)}°C"
-            )
-        if rain_detected_time:
-            messages.append(
-                f"• คาดว่ามีฝนตกช่วงเวลา {rain_detected_time} น."
-            )
-        if not messages:
-            messages.append("• สภาพอากาศปกติ ไม่มีฝนตก")
-        return "\n".join(messages)
-    except Exception as e:
-        return f"❌ เกิดข้อผิดพลาดในการดึงข้อมูลอากาศ: {e}"
-
-def get_tmd_radar_nowcast(
-    radar_url: str = TMD_RADAR_URL,
-    target_area: str = "ชัยนาท"
-) -> str | None:
-    """
-    Provides a short-term rain forecast (nowcast) by checking the TMD
-    radar page for mentions of significant rain in a target area.
-
-    Parameters
-    ----------
-    radar_url : str
-        The URL to the TMD weather radar page.
-    target_area : str
-        The name of the province/area to check for (e.g., "ชัยนาท").
-
-    Returns
-    -------
-    str | None
-        A nowcast message if rain is imminent, otherwise None.
-    """
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(radar_url, headers=headers, timeout=20)
-        response.raise_for_status()
-        response.encoding = 'utf-8'
-
-        soup = BeautifulSoup(response.text, 'html.parser')
-        page_text = soup.get_text()
-
-        if target_area in page_text:
-            if "ฝนปานกลาง" in page_text or "ฝนหนัก" in page_text:
-                return f"🛰️ เรดาร์ตรวจพบกลุ่มฝนบริเวณ จ.{target_area} อาจมีฝนตกใน 1-2 ชั่วโมง"
-        return None
-    except Exception as e:
-        print(f"❌ ERROR: get_tmd_radar_nowcast: {e}")
-        return None
-
-# --- ค่าคงที่ ---
-SINGBURI_URL = "https://singburi.thaiwater.net/wl"
-DISCHARGE_URL = 'https://tiwrm.hii.or.th/DATA/REPORT/php/chart/chaopraya/small/chaopraya.php'
 LINE_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_API_URL = "https://api.line.me/v2/bot/message/broadcast"
 
-# -- อ่านข้อมูลย้อนหลังจาก Excel --
+# Data Source URLs
+TMD_RADAR_URL = "https://weather.tmd.go.th/chaophraya.php"
+SINGBURI_URL = "https://singburi.thaiwater.net/wl"
+DISCHARGE_URL = 'https://tiwrm.hii.or.th/DATA/REPORT/php/chart/chaopraya/small/chaopraya.php'
+
+# Location Coordinates for Pho Nang Dam Ok
+WEATHER_LAT = 15.120
+WEATHER_LON = 100.283
+
+# Thai month mapping for Excel data
 THAI_MONTHS = {
     'มกราคม':1, 'กุมภาพันธ์':2, 'มีนาคม':3, 'เมษายน':4,
     'พฤษภาคม':5, 'มิถุนายน':6, 'กรกฎาคม':7, 'สิงหาคม':8,
     'กันยายน':9, 'ตุลาคม':10, 'พฤศจิกายน':11, 'ธันวาคม':12
 }
 
-# --- พยากรณ์อากาศ ---
-WEATHER_LAT = 15.120
-WEATHER_LON = 100.283
 
-def weather_code_to_description(code: int, precipitation: float) -> str:
+# --- NEW: Enhanced Weather Analysis Functions (Based on Suggestions) ---
+
+def improved_weather_description(
+    code: int, precipitation: float, temp_max: float
+) -> str:
+    """
+    Improved weather code translation with more detailed and tropical-specific logic.
+    Considers precipitation thresholds and extreme heat.
+    """
+    # Thunderstorm
     if code in {95, 96, 99}:
         return "พายุฝนฟ้าคะนอง"
+    # Rain (adjusted thresholds for tropical climate)
+    if code in {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82}:
+        if precipitation >= 20.0:
+            return "ฝนตกหนักมาก"
+        elif precipitation >= 10.0:
+            return "ฝนตกหนัก"
+        elif precipitation >= 5.0:
+            return "ฝนปานกลาง"
+        else:
+            return "ฝนตกเล็กน้อย"
+    # Heat warnings
+    if code <= 3: # Clear or partly cloudy
+        if temp_max >= 37.0:
+            return "มีเมฆน้อยและอากาศร้อนจัด"
+        elif temp_max >= 35.0:
+            return "มีเมฆน้อยและอากาศร้อน"
+    # General cases
     if code == 0:
         return "ท้องฟ้าแจ่มใส"
     if code in {1, 2, 3}:
         return "มีเมฆเป็นส่วนใหญ่"
     if code in {45, 48}:
         return "มีหมอก"
-    if code in {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82}:
-        if precipitation >= 10.0:
-            return "ฝนตกหนัก"
-        if precipitation >= 2.0:
-            return "ฝนปานกลาง"
-        return "ฝนตกเล็กน้อย"
     if code in {71, 73, 75, 77, 85, 86}:
-        return "หิมะ"
-    return "สภาพอากาศไม่ทราบแน่ชัด"
+        return "หิมะ" # Unlikely but kept for completeness
+    return "ไม่สามารถระบุสภาพอากาศได้"
 
-def get_weather_forecast(
-    lat: float = WEATHER_LAT,
-    lon: float = WEATHER_LON,
-    days: int = 3,
-    timezone: str = "Asia/Bangkok",
-    timeout: int = 15,
-) -> List[Tuple[str, str]]:
+
+def get_openweather_data(lat: float, lon: float, api_key: str) -> Dict[str, Any] | None:
+    """Fetches current day forecast data from OpenWeather."""
     try:
-        params = {
-            "latitude": lat,
-            "longitude": lon,
-            "daily": "weathercode,precipitation_sum",
-            "timezone": timezone,
-        }
-        resp = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params=params,
-            timeout=timeout,
+        url = (
+            f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
+            f"&appid={api_key}&units=metric"
         )
+        resp = requests.get(url, timeout=15)
         resp.raise_for_status()
-        data = resp.json().get("daily", {})
-        dates = data.get("time", [])
-        codes = data.get("weathercode", [])
-        precipitation_list = data.get("precipitation_sum", [])
-        forecast = []
-        for i in range(min(days, len(dates))):
-            date = dates[i]
-            code = codes[i] if i < len(codes) else None
-            prec = precipitation_list[i] if i < len(precipitation_list) else 0.0
-            desc = weather_code_to_description(code, prec) if code is not None else "-"
-            forecast.append((date, desc))
-        return forecast
+        data = resp.json()
+
+        analysis = {'temp_max': -999.0, 'rain_chance_time': None, 'humidity': 0}
+        tz = pytz.timezone("Asia/Bangkok")
+        today_str = datetime.now(tz).strftime("%Y-%m-%d")
+        
+        entry_count = 0
+        total_humidity = 0
+
+        for entry in data.get("list", []):
+            if today_str not in entry.get("dt_txt", ""):
+                continue
+            
+            main_data = entry.get("main", {})
+            temp = main_data.get("temp")
+            humidity = main_data.get("humidity")
+
+            if temp is not None and temp > analysis['temp_max']:
+                analysis['temp_max'] = temp
+            
+            if humidity is not None:
+                total_humidity += humidity
+                entry_count += 1
+
+            weather = entry.get("weather", [])
+            if weather and analysis['rain_chance_time'] is None:
+                weather_id = weather[0].get("id")
+                # Detects thunderstorms (2xx) or rain (5xx)
+                if 200 <= weather_id < 600:
+                    analysis['rain_chance_time'] = entry.get("dt_txt", "")[11:16]
+        
+        if entry_count > 0:
+            analysis['humidity'] = total_humidity / entry_count
+
+        return analysis
     except Exception as e:
-        print(f"❌ ERROR: get_weather_forecast: {e}")
-        return []
+        print(f"❌ ERROR: get_openweather_data: {e}")
+        return None
+
+
+def get_tmd_radar_nowcast(target_area: str = "ชัยนาท") -> Dict[str, Any] | None:
+    """
+    Provides a short-term rain 'nowcast' from TMD radar page.
+    Returns a dictionary indicating if rain is detected.
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(TMD_RADAR_URL, headers=headers, timeout=20)
+        response.raise_for_status()
+        response.encoding = 'utf-8'
+        soup = BeautifulSoup(response.text, 'html.parser')
+        page_text = soup.get_text()
+
+        if target_area in page_text:
+            # Check for specific keywords indicating rain
+            if "ฝนปานกลาง" in page_text or "ฝนหนัก" in page_text:
+                return {"rain_incoming": True, "intensity": "ปานกลางถึงหนัก"}
+        return {"rain_incoming": False}
+    except Exception as e:
+        print(f"❌ ERROR: get_tmd_radar_nowcast: {e}")
+        return None
+
+def calculate_heat_index(temp_c: float, humidity: float) -> float:
+    """Estimates the heat index (feels-like temperature). Simplified formula."""
+    if temp_c < 26.7: # Heat index is typically not calculated for lower temps
+        return temp_c
+        
+    # Simplified formula, for approximation
+    heat_index = -8.78469475556 + 1.61139411 * temp_c + 2.33854883889 * humidity + \
+                 -0.14611605 * temp_c * humidity + -0.012308094 * (temp_c**2) + \
+                 -0.0164248277778 * (humidity**2) + 0.002211732 * (temp_c**2) * humidity + \
+                 0.00072546 * temp_c * (humidity**2) + \
+                 -0.000003582 * (temp_c**2) * (humidity**2)
+    return heat_index
+
+def get_local_weather_advice(analysis: Dict[str, Any]) -> str | None:
+    """Generates specific advice based on the weather analysis."""
+    advice = []
+    # Advice for farmers on heat
+    if analysis.get('temp_max', 0) > 35:
+        advice.append("🌾 ชาวนา: ควรหลีกเลี่ยงการทำงานกลางแจ้งช่วง 10:00-15:00 น.")
+    # Advice for riverside residents
+    if analysis.get('rain_incoming'):
+         advice.append("📍 พื้นที่ริมน้ำ: โปรดระวังระดับน้ำที่อาจเพิ่มขึ้นจากฝนตกหนัก")
+    return " • ".join(advice) if advice else None
+
+def get_enhanced_weather_alert(lat: float, lon: float) -> str:
+    """
+    Generates a comprehensive and actionable weather alert by combining
+    data from OpenWeather and TMD radar.
+    """
+    try:
+        # Step 1: Fetch data from all available sources
+        openweather_data = get_openweather_data(lat, lon, OPENWEATHER_API_KEY)
+        radar_data = get_tmd_radar_nowcast(target_area="ชัยนาท")
+        
+        # Step 2: Analyze and combine data
+        if not openweather_data:
+            return "• ไม่สามารถดึงข้อมูลพยากรณ์อากาศได้"
+
+        messages = []
+        
+        # Radar Nowcast (highest priority)
+        if radar_data and radar_data.get('rain_incoming'):
+            messages.append(
+                f"🛰️ เรดาร์ตรวจพบกลุ่มฝน'ความแรง{radar_data['intensity']}'"
+                f"บริเวณ จ.ชัยนาท อาจมีฝนตกใน 1-2 ชั่วโมงนี้"
+            )
+            
+        # Temperature and Heat Index Alert
+        temp_max = openweather_data.get('temp_max', 0)
+        humidity = openweather_data.get('humidity', 0)
+        if temp_max >= 37.0:
+            heat_index = calculate_heat_index(temp_max, humidity)
+            messages.append(
+                f"🌡️ อากาศร้อนจัด! อุณหภูมิสูงสุด {temp_max:.1f}°C "
+                f"(รู้สึกเหมือน {heat_index:.1f}°C)"
+            )
+            messages.append("💧 ควรดื่มน้ำบ่อยๆ และหลีกเลี่ยงกิจกรรมกลางแจ้ง")
+        elif temp_max >= 35.0:
+            messages.append(f"🌡️ อากาศร้อน! อุณหภูมิสูงสุด {temp_max:.1f}°C")
+
+        # Rain forecast from OpenWeather (if radar doesn't show immediate rain)
+        rain_time = openweather_data.get('rain_chance_time')
+        if rain_time and not (radar_data and radar_data.get('rain_incoming')):
+            messages.append(f"🌦️ คาดว่าอาจมีฝนช่วงเวลาประมาณ {rain_time} น.")
+            
+        # Add local advice
+        local_advice = get_local_weather_advice({
+            "temp_max": temp_max,
+            "rain_incoming": radar_data.get('rain_incoming') if radar_data else False
+        })
+        if local_advice:
+            messages.append(f"\nคำแนะนำเพิ่มเติม:\n{local_advice}")
+
+        return "\n".join(messages) if messages else "• สภาพอากาศวันนี้โดยรวมปกติ"
+
+    except Exception as e:
+        return f"❌ เกิดข้อผิดพลาดในการสร้างข้อมูลพยากรณ์อากาศ: {e}"
+
+
+# --- Core Data Fetching Functions (Largely Unchanged) ---
 
 def get_historical_from_excel(year_be: int) -> int | None:
     path = f"data/ระดับน้ำปี{year_be}.xlsx"
@@ -243,239 +242,170 @@ def get_historical_from_excel(year_be: int) -> int | None:
         today_d, today_m = now.day, now.month
         match = df[(df['วันที่']==today_d) & (df['month_num']==today_m)]
         if not match.empty:
-            print(f"✅ พบข้อมูลย้อนหลังสำหรับปี {year_be}: {int(match.iloc[0]['discharge'])} ลบ.ม./วินาที")
-            return int(match.iloc[0]['discharge'])
+            discharge_val = int(match.iloc[0]['discharge'])
+            print(f"✅ พบข้อมูลย้อนหลังปี {year_be}: {discharge_val} ลบ.ม./วินาที")
+            return discharge_val
         else:
             print(f"⚠️ ไม่พบข้อมูลสำหรับวันที่ {today_d}/{today_m} ในไฟล์ปี {year_be}")
             return None
     except Exception as e:
-        print(f"❌ ERROR: ไม่สามารถโหลดข้อมูลย้อนหลังจาก Excel ได้ ({path}): {e}")
+        print(f"❌ ERROR: ไม่สามารถโหลดข้อมูล Excel ({path}): {e}")
         return None
 
-def get_sapphaya_data(
-    province_code: str = "18",
-    target_tumbon: str = "โพนางดำออก",
-    target_station_name: str = "สรรพยา",
-    timeout: int = 15,
-    retries: int = 3,
-):
-    api_url_template = (
-        "https://api-v3.thaiwater.net/api/v1/thaiwater30/public/waterlevel?province_code={code}"
-    )
+def get_sapphaya_data(retries: int = 3):
+    api_url = "https://api-v3.thaiwater.net/api/v1/thaiwater30/public/waterlevel?province_code=18"
     for attempt in range(retries):
         try:
-            url = api_url_template.format(code=province_code)
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/91.0.4472.124 Safari/537.36"
-                ),
-            }
-            response = requests.get(url, headers=headers, timeout=timeout)
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            response = requests.get(api_url, headers=headers, timeout=15)
             response.raise_for_status()
             data = response.json().get("data", [])
             for item in data:
-                geocode = item.get("geocode", {})
-                tumbon_name = geocode.get("tumbon_name", {}).get("th", "")
-                station_info = item.get("station", {})
-                station_name = station_info.get("tele_station_name", {}).get("th", "")
-                if tumbon_name == target_tumbon and station_name == target_station_name:
-                    wl_str = item.get("waterlevel_msl")
-                    water_level = None
-                    if wl_str is not None:
-                        try:
-                            water_level = float(wl_str)
-                        except ValueError:
-                            water_level = None
-                    bank_level = 13.87
-                    print(
-                        f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (กำหนดเอง)"
-                    )
+                if (item.get("station", {}).get("tele_station_name", {}).get("th") == "สรรพยา" and
+                    item.get("geocode", {}).get("tumbon_name", {}).get("th") == "โพนางดำออก"):
+                    water_level = float(item.get("waterlevel_msl"))
+                    bank_level = 13.87 # Fixed value
+                    print(f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level}")
                     return water_level, bank_level
-            print(
-                f"⚠️ ไม่พบข้อมูลสถานี '{target_station_name}' ที่ {target_tumbon} ในการเรียก API ครั้งที่ {attempt + 1}"
-            )
+            print(f"⚠️ ไม่พบสถานี 'สรรพยา' ที่ ต.โพนางดำออก ในการเรียก API ครั้งที่ {attempt + 1}")
         except Exception as e:
             print(f"❌ ERROR: get_sapphaya_data (ครั้งที่ {attempt + 1}): {e}")
         if attempt < retries - 1:
             time.sleep(3)
     return None, None
 
-def fetch_chao_phraya_dam_discharge(url: str, timeout: int = 30):
+def fetch_chao_phraya_dam_discharge(url: str):
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                          'AppleWebKit/537.36 (KHTML, like Gecko) '
-                          'Chrome/91.0.4472.124 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
         }
-        cache_buster_url = f"{url}?cb={random.randint(10000, 99999)}"
-        response = requests.get(cache_buster_url, headers=headers, timeout=10)
+        response = requests.get(f"{url}?cb={random.randint(10000, 99999)}", headers=headers, timeout=20)
         response.raise_for_status()
         response.encoding = 'utf-8'
         match = re.search(r'var json_data = (\[.*\]);', response.text)
         if not match:
-            print("❌ ERROR: ไม่พบข้อมูล JSON ในหน้าเว็บ")
+            print("❌ ERROR: ไม่พบ JSON ในหน้าเว็บเขื่อนเจ้าพระยา")
             return None
-        json_string = match.group(1)
-        data = json.loads(json_string)
-        water_storage = data[0]['itc_water']['C13']['storage']
-        if water_storage is not None:
-            if isinstance(water_storage, (int, float)):
-                value = float(water_storage)
-            else:
-                value = float(str(water_storage).replace(',', ''))
-            print(f"✅ พบข้อมูลเขื่อนเจ้าพระยา: {value}")
-            return value
+        data = json.loads(match.group(1))
+        # Navigate through the specific JSON structure for dam C13
+        value = float(data[0]['itc_water']['C13']['storage'])
+        print(f"✅ พบข้อมูลเขื่อนเจ้าพระยา: {value}")
+        return value
     except Exception as e:
         print(f"❌ ERROR: fetch_chao_phraya_dam_discharge: {e}")
     return None
 
+
+# --- Message Creation & Sending ---
+
 def analyze_and_create_message(
-    water_level: float,
-    dam_discharge: float,
-    bank_height: float,
-    hist_2567: int | None = None,
-    hist_2554: int | None = None,
-    weather_summary: List[Tuple[str, str]] | None = None,
+    water_level: float, dam_discharge: float, bank_height: float,
+    hist_2567: int | None, hist_2554: int | None
 ) -> str:
     distance_to_bank = bank_height - water_level
-    if dam_discharge is not None and (dam_discharge > 2400 or distance_to_bank < 1.0):
-        ICON = "🟥"
-        HEADER = "‼️ ประกาศเตือนภัยระดับสูงสุด ‼️"
-        summary_lines = [
-            "คำแนะนำ:",
-            "1. เตรียมพร้อมอพยพหากอยู่ในพื้นที่เสี่ยง",
-            "2. ขนย้ายทรัพย์สินขึ้นที่สูงโดยด่วน",
-            "3. งดใช้เส้นทางสัญจรริมแม่น้ำ",
-        ]
-    elif dam_discharge is not None and (dam_discharge > 1800 or distance_to_bank < 2.0):
-        ICON = "🟨"
-        HEADER = "‼️ ประกาศเฝ้าระวัง ‼️"
-        summary_lines = [
-            "คำแนะนำ:",
-            "1. บ้านเรือนริมตลิ่งนอกคันกั้นน้ำ ให้เริ่มขนของขึ้นที่สูง",
-            "2. ติดตามสถานการณ์อย่างใกล้ชิด",
-        ]
+    if dam_discharge > 2400 or distance_to_bank < 1.0:
+        ICON, HEADER = "🟥", "‼️ ประกาศเตือนภัยระดับสูงสุด ‼️"
+        summary = ["คำแนะนำ:", "1. เตรียมพร้อมอพยพหากอยู่ในพื้นที่เสี่ยง",
+                   "2. ขนย้ายทรัพย์สินขึ้นที่สูงโดยด่วน", "3. งดใช้เส้นทางสัญจรริมแม่น้ำ"]
+    elif dam_discharge > 1800 or distance_to_bank < 2.0:
+        ICON, HEADER = "🟨", "‼️ ประกาศเฝ้าระวัง ‼️"
+        summary = ["คำแนะนำ:", "1. บ้านเรือนริมตลิ่งนอกคันกั้นน้ำ ให้เริ่มขนของขึ้นที่สูง",
+                   "2. ติดตามสถานการณ์อย่างใกล้ชิด"]
     else:
-        ICON = "🟩"
-        HEADER = "สถานะปกติ"
-        summary_lines = [
-            f"ระดับน้ำยังห่างตลิ่ง {distance_to_bank:.2f} ม. ถือว่า \"ปลอดภัย\" ✅",
-            "ประชาชนใช้ชีวิตได้ตามปกติครับ",
-        ]
-    now = datetime.now(pytz.timezone("Asia/Bangkok"))
-    TIMESTAMP = now.strftime("%d/%m/%Y %H:%M")
-    msg_lines: List[str] = []
-    msg_lines.append(f"{ICON} {HEADER}")
-    msg_lines.append(f"📍 ต.โพนางดำออก อ.สรรพยา จ.ชัยนาท")
-    msg_lines.append(f"🗓️ วันที่: {TIMESTAMP} น.")
-    msg_lines.append("")
-    msg_lines.append("🌊 ระดับน้ำ + ตลิ่ง")
-    msg_lines.append(f"• ระดับน้ำ: {water_level:.2f} ม.รทก.")
-    msg_lines.append(f"• ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)")
-    msg_lines.append("")
-    msg_lines.append("💧 ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา")
-    if dam_discharge is not None:
-        msg_lines.append(f"{dam_discharge:,} ลบ.ม./วินาที")
-    else:
-        msg_lines.append("ข้อมูลไม่พร้อมใช้งาน")
-    msg_lines.append("")
-    msg_lines.append("📊 เปรียบเทียบย้อนหลัง")
-    if hist_2567 is not None:
-        msg_lines.append(f"• ปี 2567: {hist_2567:,} ลบ.ม./วินาที")
-    if hist_2554 is not None:
-        msg_lines.append(f"• ปี 2554: {hist_2554:,} ลบ.ม./วินาที")
-    msg_lines.append("")
-    msg_lines.append("🧾 สรุปสถานการณ์")
-    for line in summary_lines:
-        msg_lines.append(line)
-    return "\n".join(msg_lines)
+        ICON, HEADER = "🟩", "สถานะปกติ"
+        summary = [f"ระดับน้ำยังห่างตลิ่ง {distance_to_bank:.2f} ม. ถือว่า \"ปลอดภัย\" ✅",
+                   "ประชาชนใช้ชีวิตได้ตามปกติครับ"]
 
-def create_error_message(station_status, discharge_status):
+    now = datetime.now(pytz.timezone("Asia/Bangkok"))
+    msg = [
+        f"{ICON} {HEADER}",
+        f"📍 ต.โพนางดำออก อ.สรรพยา จ.ชัยนาท",
+        f"🗓️ วันที่: {now.strftime('%d/%m/%Y %H:%M')} น.",
+        "",
+        "🌊 **ระดับน้ำ + ตลิ่ง**",
+        f"• ระดับน้ำ: {water_level:.2f} ม.รทก.",
+        f"• ตลิ่ง: {bank_height:.2f} ม.รทก. (ต่ำกว่า {distance_to_bank:.2f} ม.)",
+        "",
+        "💧 **ปริมาณน้ำปล่อยเขื่อนเจ้าพระยา**",
+        f"• {dam_discharge:,.0f} ลบ.ม./วินาที",
+        "",
+        "📊 **เปรียบเทียบย้อนหลัง (ณ วันเดียวกัน)**",
+        f"• ปี 2567: {hist_2567:,} ลบ.ม./วินาที" if hist_2567 else "• ปี 2567: ไม่มีข้อมูล",
+        f"• ปี 2554: {hist_2554:,} ลบ.ม./วินาที" if hist_2554 else "• ปี 2554: ไม่มีข้อมูล",
+        "",
+        "🧾 **สรุปสถานการณ์**",
+        *summary
+    ]
+    return "\n".join(msg)
+
+def create_error_message(station_status: str, discharge_status: str) -> str:
     now = datetime.now(pytz.timezone('Asia/Bangkok'))
     return (
-        f"⚙️❌ เกิดข้อผิดพลาดในการดึงข้อมูล ❌⚙️\n"
+        f"⚙️❌ เกิดข้อผิดพลาดในการดึงข้อมูลหลัก ❌⚙️\n"
         f"เวลา: {now.strftime('%d/%m/%Y %H:%M')} น.\n\n"
         f"• สถานะข้อมูลระดับน้ำสรรพยา: {station_status}\n"
         f"• สถานะข้อมูลเขื่อนเจ้าพระยา: {discharge_status}\n\n"
-        f"กรุณาตรวจสอบ Log บน GitHub Actions เพื่อดูรายละเอียดข้อผิดพลาดครับ"
+        f"ระบบจะพยายามอีกครั้งในรอบถัดไป"
     )
 
-def send_line_broadcast(message):
+def send_line_broadcast(message: str):
     if not LINE_TOKEN:
-        print("❌ ไม่พบ LINE_CHANNEL_ACCESS_TOKEN!")
+        print("❌ ไม่พบ LINE_CHANNEL_ACCESS_TOKEN! ไม่สามารถส่งข้อความได้")
         return
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {LINE_TOKEN}"
-    }
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {LINE_TOKEN}"}
     payload = {"messages": [{"type": "text", "text": message}]}
     try:
         res = requests.post(LINE_API_URL, headers=headers, json=payload, timeout=10)
         res.raise_for_status()
         print("✅ ส่งข้อความ Broadcast สำเร็จ!")
     except Exception as e:
-        print(f"❌ ERROR: LINE Broadcast: {e}")
+        print(f"❌ ERROR: LINE Broadcast: {e.response.text if hasattr(e, 'response') else e}")
+
+# --- Main Execution ---
 
 if __name__ == "__main__":
     print("=== เริ่มการทำงานระบบแจ้งเตือนน้ำ (เวอร์ชันปรับปรุง) ===")
     
-    # --- Fetch Core Data ---
+    # --- 1. Fetch Core Water Data ---
+    print("\n💧 กำลังดึงข้อมูลระดับน้ำและเขื่อน...")
     water_level, bank_level = get_sapphaya_data()
     dam_discharge = fetch_chao_phraya_dam_discharge(DISCHARGE_URL)
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
 
-    # --- Build Core Message ---
-    if water_level is not None and bank_level is not None and dam_discharge is not None:
+    # --- 2. Build Core Water Message ---
+    if all([water_level, bank_level, dam_discharge]):
         core_message = analyze_and_create_message(
-            water_level,
-            dam_discharge,
-            bank_level,
-            hist_2567,
-            hist_2554,
+            water_level, dam_discharge, bank_level, hist_2567, hist_2554
         )
     else:
         station_status = "สำเร็จ" if water_level is not None else "ล้มเหลว"
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
         core_message = create_error_message(station_status, discharge_status)
 
-    # --- Weather Section (Improved) ---
-    print("\n🌦️  กำลังดึงข้อมูลพยากรณ์อากาศ...")
-    # 1. Get daily forecast from OpenWeather (for temp & general rain chance)
-    weather_alert_daily = get_openweather_alert()
-
-    # 2. Get short-term "nowcast" from TMD Radar
-    radar_nowcast = get_tmd_radar_nowcast(target_area="ชัยนาท")
-
-    # 3. Construct the final weather message section
-    weather_section_lines = ["🌡️ พยากรณ์อากาศวันนี้"]
-    if radar_nowcast:
-        # If radar detects imminent rain, prioritize that message
-        weather_section_lines.append(radar_nowcast)
+    # --- 3. Build Enhanced Weather Message ---
+    print("\n🌦️  กำลังดึงและวิเคราะห์ข้อมูลพยากรณ์อากาศ...")
+    weather_section = (
+        "🌡️ **พยากรณ์อากาศวันนี้**\n" +
+        get_enhanced_weather_alert(WEATHER_LAT, WEATHER_LON)
+    )
     
-    if weather_alert_daily:
-        # Append the daily summary from OpenWeather
-        weather_section_lines.append(weather_alert_daily)
-    
-    if len(weather_section_lines) == 1:
-        # Fallback if both weather sources fail
-        weather_section_lines.append("• ไม่สามารถดึงข้อมูลพยากรณ์อากาศได้")
-    
-    weather_section = "\n".join(weather_section_lines)
-
-    # --- Assemble Final Message for LINE ---
+    # --- 4. Assemble Final Message for LINE ---
     final_message = (
         f"{core_message}\n\n"
         f"{weather_section}\n\n"
-        f"เทศบาลตำบลโพนางดำออก"
+        f"ที่มา: เทศบาลตำบลโพนางดำออก"
     )
 
-    print("\n📤 ข้อความที่จะแจ้งเตือน:")
+    print("\n📤 ข้อความฉบับสมบูรณ์ที่จะแจ้งเตือน:")
+    print("-" * 40)
     print(final_message)
+    print("-" * 40)
+    
+    # --- 5. Send to LINE ---
     print("\n🚀 กำลังส่งข้อความไปยัง LINE...")
     send_line_broadcast(final_message)
-    print("✅ เสร็จสิ้นการทำงาน")
+    
+    print("\n✅ การทำงานเสร็จสิ้น")
