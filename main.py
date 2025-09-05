@@ -252,6 +252,53 @@ def get_historical_from_excel(year_be: int) -> int | None:
         print(f"❌ ERROR: ไม่สามารถโหลดข้อมูลย้อนหลังจาก Excel ได้ ({path}): {e}")
         return None
 
+# --- Helper function to read historical discharge values from a combined CSV ---
+def get_historical_from_csv(year_be: int, csv_path: str = "historical_comparison_2554_2565_2567.csv") -> int | None:
+    """
+    Return the historical discharge value for a given Buddhist Era year and the current day/month
+    from a CSV file.  The CSV must have a 'day_month' column formatted as DD-MM and
+    columns for each year (e.g., '2554', '2565', '2567') containing discharge values.
+
+    Parameters
+    ----------
+    year_be : int
+        The Buddhist Era year to look up (e.g., 2565 for the year 2022).
+    csv_path : str
+        Path to the CSV containing historical values.
+
+    Returns
+    -------
+    int | None
+        The discharge value for the current day/month in the specified year, or None if not found.
+    """
+    try:
+        if not os.path.exists(csv_path):
+            print(f"⚠️ ไม่พบไฟล์ข้อมูลย้อนหลัง (CSV) ที่: {csv_path}")
+            return None
+        df = pd.read_csv(csv_path)
+        year_col = str(year_be)
+        if year_col not in df.columns:
+            print(f"⚠️ ไม่พบคอลัมน์ปี {year_col} ในไฟล์ CSV")
+            return None
+        now = datetime.now(pytz.timezone('Asia/Bangkok'))
+        day_month = now.strftime("%d-%m")
+        match = df[df['day_month'] == day_month]
+        if match.empty:
+            print(f"⚠️ ไม่มีข้อมูลย้อนหลังสำหรับ {day_month} ในไฟล์ CSV")
+            return None
+        value = match.iloc[0][year_col]
+        if pd.isna(value):
+            print(f"⚠️ ไม่มีค่าปริมาณน้ำสำหรับ {day_month} ปี {year_be} ใน CSV")
+            return None
+        try:
+            return int(float(value))
+        except Exception:
+            print(f"⚠️ ไม่สามารถแปลงค่าปริมาณน้ำเป็นตัวเลข: {value}")
+            return None
+    except Exception as e:
+        print(f"❌ ERROR: ไม่สามารถโหลดข้อมูลย้อนหลังจาก CSV ได้ ({csv_path}): {e}")
+        return None
+
 def get_sapphaya_data(
     province_code: str = "18",
     target_tumbon: str = "โพนางดำออก",
@@ -288,9 +335,22 @@ def get_sapphaya_data(
                             water_level = float(wl_str)
                         except ValueError:
                             water_level = None
-                    bank_level = 13.87
+                    # Bank height (ตลิ่ง) may be overridden via environment variable "BANK_HEIGHT".
+                    # If set, use that value; otherwise fall back to the default 13.87.
+                    env_bank_height = os.environ.get("BANK_HEIGHT")
+                    default_bank = 13.87
+                    if env_bank_height:
+                        try:
+                            bank_level = float(env_bank_height)
+                        except Exception:
+                            print(
+                                f"⚠️ ค่าความสูงตลิ่งใน environment ไม่ถูกต้อง ('{env_bank_height}'), ใช้ค่าเริ่มต้น {default_bank}"
+                            )
+                            bank_level = default_bank
+                    else:
+                        bank_level = default_bank
                     print(
-                        f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (กำหนดเอง)"
+                        f"✅ พบข้อมูลสรรพยา: ระดับน้ำ={water_level}, ระดับตลิ่ง={bank_level} (จากค่า BANK_HEIGHT หรือค่าเริ่มต้น)"
                     )
                     return water_level, bank_level
             print(
@@ -338,6 +398,7 @@ def analyze_and_create_message(
     dam_discharge: float,
     bank_height: float,
     hist_2567: int | None = None,
+    hist_2565: int | None = None,
     hist_2554: int | None = None,
     weather_summary: List[Tuple[str, str]] | None = None,
 ) -> str:
@@ -384,8 +445,11 @@ def analyze_and_create_message(
         msg_lines.append("ข้อมูลไม่พร้อมใช้งาน")
     msg_lines.append("")
     msg_lines.append("📊 เปรียบเทียบย้อนหลัง")
+    # List historical comparisons in chronological order: latest year first
     if hist_2567 is not None:
         msg_lines.append(f"• ปี 2567: {hist_2567:,} ลบ.ม./วินาที")
+    if hist_2565 is not None:
+        msg_lines.append(f"• ปี 2565: {hist_2565:,} ลบ.ม./วินาที")
     if hist_2554 is not None:
         msg_lines.append(f"• ปี 2554: {hist_2554:,} ลบ.ม./วินาที")
     msg_lines.append("")
@@ -428,14 +492,18 @@ if __name__ == "__main__":
     dam_discharge = fetch_chao_phraya_dam_discharge(DISCHARGE_URL)
     hist_2567 = get_historical_from_excel(2567)
     hist_2554 = get_historical_from_excel(2554)
+    # Read year 2565 data from the combined CSV if available
+    hist_2565 = get_historical_from_csv(2565)
 
     # --- Build Core Message ---
     if water_level is not None and bank_level is not None and dam_discharge is not None:
+        # Pass 2567, 2565, 2554 historical values to the message creator
         core_message = analyze_and_create_message(
             water_level,
             dam_discharge,
             bank_level,
             hist_2567,
+            hist_2565,
             hist_2554,
         )
     else:
@@ -443,34 +511,10 @@ if __name__ == "__main__":
         discharge_status = "สำเร็จ" if dam_discharge is not None else "ล้มเหลว"
         core_message = create_error_message(station_status, discharge_status)
 
-    # --- Weather Section (Improved) ---
-    print("\n🌦️  กำลังดึงข้อมูลพยากรณ์อากาศ...")
-    # 1. Get daily forecast from OpenWeather (for temp & general rain chance)
-    weather_alert_daily = get_openweather_alert()
-
-    # 2. Get short-term "nowcast" from TMD Radar
-    radar_nowcast = get_tmd_radar_nowcast(target_area="ชัยนาท")
-
-    # 3. Construct the final weather message section
-    weather_section_lines = ["🌡️ พยากรณ์อากาศวันนี้"]
-    if radar_nowcast:
-        # If radar detects imminent rain, prioritize that message
-        weather_section_lines.append(radar_nowcast)
-    
-    if weather_alert_daily:
-        # Append the daily summary from OpenWeather
-        weather_section_lines.append(weather_alert_daily)
-    
-    if len(weather_section_lines) == 1:
-        # Fallback if both weather sources fail
-        weather_section_lines.append("• ไม่สามารถดึงข้อมูลพยากรณ์อากาศได้")
-    
-    weather_section = "\n".join(weather_section_lines)
-
     # --- Assemble Final Message for LINE ---
+    # The weather forecast section is intentionally removed per user request
     final_message = (
         f"{core_message}\n\n"
-        f"{weather_section}\n\n"
         f"เทศบาลตำบลโพนางดำออก"
     )
 
